@@ -1,8 +1,10 @@
 import phonenumbers
 from phonenumbers import geocoder
+import sys
 
 # take phone number input from user
-input_number = input("Enter phone number with country code: ")
+# input_number = input("Enter phone number with country code: ")
+input_number = "+12136574429"
 
 # parse phone number
 pn = phonenumbers.parse(input_number)
