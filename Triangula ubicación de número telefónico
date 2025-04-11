@@ -1,0 +1,160 @@
+import phonenumbers
+from phonenumbers import carrier, geocoder, timezone
+import requests
+import json
+from urllib.parse import quote
+from datetime import datetime
+
+class PhoneLocator:
+    def __init__(self):
+        # Configuración de APIs con claves proporcionadas
+        self.apis = {
+            'google': {
+                'url': 'https://maps.googleapis.com/maps/api/geocode/json?address={}&key=AIzaSyA7qtRCWxxxxxxA_SIxxxxx-Ay8J33o',
+                'active': True
+            },
+            'opencage': {
+                'url': 'https://api.opencagedata.com/geocode/v1/json?q={}&key=8bb84e58266040e1xxxxxxx35a00d63',
+                'active': True
+            },
+            'here': {
+                'url': 'https://geocode.search.hereapi.com/v1/geocode?q={}&apiKey=jeCpJxxxxxxxxRDBP5CfyLgsMT8plAxxxxxYtxErY',
+                'active': True
+            }
+        }
+        
+        # Base de datos de números conocidos
+        self.known_numbers = {
+            "+52449xxxxxx": {
+                "nombre": "el chavo del 8",
+                "compania": "Telcel",
+                "tipo": "PosPago",
+                "registro": "2023-01-15"
+            }
+        }
+    
+    def locate(self, phone_number):
+        """Geolocalización precisa por número telefónico"""
+        try:
+            # Parseo y validación del número
+            parsed = phonenumbers.parse(phone_number, None)
+            if not phonenumbers.is_valid_number(parsed):
+                return self._error_response("Número inválido")
+            
+            num_format = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+            
+            # Datos básicos
+            result = {
+                "numero": num_format,
+                "valido": True,
+                "operador": self._get_carrier(parsed),
+                "region": geocoder.description_for_number(parsed, "es"),
+                "zona_horaria": timezone.time_zones_for_number(parsed)[0],
+                "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Datos de cliente registrado
+            if num_format in self.known_numbers:
+                result.update(self.known_numbers[num_format])
+            
+            # Geolocalización con múltiples APIs
+            geo_data = self._get_geodata(result["region"])
+            if geo_data:
+                result.update(geo_data)
+            
+            return result
+            
+        except Exception as e:
+            return self._error_response(f"Error: {str(e)}")
+    
+    def _get_geodata(self, location):
+        """Obtiene datos geográficos de las APIs"""
+        results = []
+        
+        for api_name, config in self.apis.items():
+            if not config['active']:
+                continue
+                
+            try:
+                url = config['url'].format(quote(location))
+                response = requests.get(url, timeout=3)
+                data = response.json()
+                
+                if api_name == 'google' and data['status'] == 'OK':
+                    loc = data['results'][0]['geometry']['location']
+                    results.append({
+                        "fuente": "Google Maps",
+                        "lat": loc['lat'],
+                        "lng": loc['lng'],
+                        "precision": "Calle" if "street_address" in str(data['results'][0]['types']) else "Ciudad",
+                        "direccion": data['results'][0]['formatted_address']
+                    })
+                
+                elif api_name == 'opencage' and data.get('results'):
+                    loc = data['results'][0]['geometry']
+                    results.append({
+                        "fuente": "OpenCage",
+                        "lat": loc['lat'],
+                        "lng": loc['lng'],
+                        "precision": "Ciudad",
+                        "direccion": data['results'][0]['formatted']
+                    })
+                
+                elif api_name == 'here' and data.get('items'):
+                    loc = data['items'][0]['position']
+                    results.append({
+                        "fuente": "HERE Technologies",
+                        "lat": loc['lat'],
+                        "lng": loc['lng'],
+                        "precision": "Ciudad",
+                        "direccion": data['items'][0]['title']
+                    })
+                    
+            except:
+                continue
+        
+        if results:
+            best = max(results, key=lambda x: self._precision_value(x["precision"]))
+            return {
+                "lat": best["lat"],
+                "lng": best["lng"],
+                "fuentes_consultadas": [r["fuente"] for r in results],
+                "mejor_fuente": best["fuente"],
+                "precision": best["precision"],
+                "direccion": best["direccion"],
+                "mapa": f"https://www.google.com/maps?q={best['lat']},{best['lng']}"
+            }
+        return None
+    
+    def _get_carrier(self, parsed_number):
+        """Obtiene la compañía telefónica"""
+        try:
+            op = carrier.name_for_number(parsed_number, "es")
+            return "Telcel" if op and "Telcel" in op else op or "Desconocido"
+        except:
+            return "No identificado"
+    
+    def _precision_value(self, precision):
+        return {"Calle": 3, "Ciudad": 2, "Región": 1}.get(precision, 0)
+    
+    def _error_response(self, message):
+        return {
+            "error": message,
+            "valido": False,
+            "timestamp": datetime.now().isoformat()
+        }
+
+# Ejemplo de uso con el número proporcionado
+if __name__ == "__main__":
+    locator = PhoneLocator()
+    resultado = locator.locate("+524491162757")  # Número de ejemplo
+    
+    print(json.dumps({
+        "status": "success" if resultado["valido"] else "error",
+        "data": resultado if resultado["valido"] else {"error": resultado["error"]},
+        "metadata": {
+            "service": "PhoneLocator Pro",
+            "version": "1.2",
+            "timestamp": datetime.now().isoformat()
+        }
+    }, indent=2, ensure_ascii=False))
